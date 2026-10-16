@@ -1,6 +1,6 @@
 {
   "name": "arduschool-gemini-backend",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,9 +11,13 @@
     "@google/genai": "latest",
     "cors": "latest",
     "dotenv": "latest",
-    "express": "latest"
+    "express": "latest",
+    "pg": "^8.16.0"
   },
   "engines": {
     "node": ">=24 <25"
+  },
+  "devDependencies": {
+    "pg-mem": "^3.0.0"
   }
 }

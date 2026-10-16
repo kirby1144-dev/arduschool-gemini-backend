@@ -4,19 +4,13 @@ import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
 
 import { openStore, dailyCsv } from './storage.js';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
 dotenv.config();
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
-const DATA_DIR = resolve(process.env.DATA_DIR || './data');
-if (process.env.RENDER && (!DATA_DIR.startsWith('/var/data/') && DATA_DIR !== '/var/data')) {
- throw new Error('Attach a persistent disk at /var/data and set DATA_DIR=/var/data/weather before starting on Render.');
-}
-if (process.env.RENDER && !existsSync('/var/data')) throw new Error('Persistent disk /var/data is not mounted.');
+if (!process.env.DATABASE_URL) throw new Error('Set DATABASE_URL to your Neon connection string in Render Environment.');
 if (!process.env.INGEST_TOKEN) throw new Error('Set INGEST_TOKEN to the value supplied in .env.example.');
-const store = openStore(DATA_DIR);
+const store = await openStore(process.env.DATABASE_URL);
 
 app.use(cors());
 app.use(express.json({ limit: "20kb" }));
@@ -25,20 +19,20 @@ app.use(express.json({ limit: "20kb" }));
 const ai = process.env.GEMINI_API_KEY ? new GoogleGenAI({apiKey:process.env.GEMINI_API_KEY}) : null;
 const device = req => String(req.query.device || 'srnhs-weather-1');
 const dateOK = date => /^\d{4}-\d{2}-\d{2}$/.test(date || '');
-app.get('/health', (req,res)=>res.json({ok:true,storage:'sqlite',dataDir:DATA_DIR}));
-app.post('/api/readings', (req,res)=>{
+app.get('/health',async (req,res)=>{await store.dates('srnhs-weather-1');res.json({ok:true,storage:'postgres',persistent:true});});
+app.post('/api/readings', async (req,res)=>{
  if(req.get('X-Device-Token') !== process.env.INGEST_TOKEN)return res.status(401).json({error:'Invalid device token'});
- try{const inserted=store.put(req.body||{});res.status(200).json({saved:true,duplicate:!inserted});}
+ try{const inserted=await store.put(req.body||{});res.status(200).json({saved:true,duplicate:!inserted});}
  catch(error){console.error('Storage:',error.message);res.status(/Invalid|Missing|RTC/.test(error.message)?400:503).json({saved:false,error:'Reading was not saved'});}
 });
-app.get('/api/dates',(req,res)=>res.json({dates:store.dates(device(req))}));
-app.get('/api/readings',(req,res)=>{
+app.get('/api/dates',async (req,res)=>res.json({dates:await store.dates(device(req))}));
+app.get('/api/readings',async (req,res)=>{
  if(!dateOK(req.query.date))return res.status(400).json({error:'Use date=YYYY-MM-DD'});
- res.json({readings:store.rows(device(req),req.query.date)});
+ res.json({readings:await store.rows(device(req),req.query.date)});
 });
-app.get('/api/readings.csv',(req,res)=>{
+app.get('/api/readings.csv',async (req,res)=>{
  if(!dateOK(req.query.date))return res.status(400).json({error:'Use date=YYYY-MM-DD'});
- const rows=store.rows(device(req),req.query.date);
+ const rows=await store.rows(device(req),req.query.date);
  res.set('Content-Type','text/csv; charset=utf-8');
  res.set('Content-Disposition',`attachment; filename="WeatherSense_${req.query.date}.csv"`);
  res.set('Cache-Control','no-store');res.send(dailyCsv(rows));
@@ -116,6 +110,8 @@ Humidity Change (30 minutes): ${Number(d.deltaHumidity30min).toFixed(2)} %
         });
     }
 });
+
+app.use((error,req,res,next)=>{console.error('Backend:',error.message);if(!res.headersSent)res.status(503).json({error:'Backend/database temporarily unavailable. Retry later.'});});
 
 app.listen(PORT, "0.0.0.0", () => {
     console.log("----------------------------------------");
